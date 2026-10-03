@@ -1,6 +1,6 @@
 # Videos
 
-1. [connecting to wifi](1.mp4)
-2. [custom order](2.mp4)
-3. [menu](3.mp4)
-4. [weight verification](4.mp4)
+- [connecting to wifi](connecting%20to%20wifi.mp4)
+- [custom order](custom%20order.mp4)
+- [menu](menu.mp4)
+- [weight verification](weight%20verification.mp4)

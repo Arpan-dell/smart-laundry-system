@@ -51,15 +51,15 @@ The system is built in three phases:
 
 | | |
 |---|---|
-| <img src="photos/1.jpg" width="400"><br>**calibration phase** | <img src="photos/2.jpg" width="400"><br>**device** |
-| <img src="photos/3.jpg" width="400"><br>**front face** | <img src="photos/4.jpg" width="400"><br>**side face** |
+| <img src="photos/calibration%20phase.jpg" width="400"><br>**calibration phase** | <img src="photos/device.jpg" width="400"><br>**device** |
+| <img src="photos/front%20face.jpg" width="400"><br>**front face** | <img src="photos/side%20face.jpg" width="400"><br>**side face** |
 
 ### Videos
 
-1. [connecting to wifi](videos/1.mp4)
-2. [custom order](videos/2.mp4)
-3. [menu](videos/3.mp4)
-4. [weight verification](videos/4.mp4)
+- [connecting to wifi](videos/connecting%20to%20wifi.mp4)
+- [custom order](videos/custom%20order.mp4)
+- [menu](videos/menu.mp4)
+- [weight verification](videos/weight%20verification.mp4)
 
 ## Future Improvements
 
