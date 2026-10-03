@@ -1,8 +1,8 @@
 // ============================================================================
-// SMART LAUNDRY AUTO-ORDERING SYSTEM - STEP 1 (Fixed Baseline)
-// - Auto-Sleep is completely removed (Screen will never turn off)
-// - Proper edge detection added (Buttons will never double-click)
-// - NO WI-FI OR TELEGRAM YET.
+// SMART LAUNDRY AUTO-ORDERING SYSTEM - Phase 1
+// Weighs the laundry basket with an HX711 load cell, shows live weight and a
+// 3-button menu on an SSD1306 OLED, and sends a pickup order to Telegram once
+// the basket stays above the target weight.
 // ============================================================================
 
 #include <WiFi.h>
@@ -14,11 +14,19 @@
 #include "soc/rtc_cntl_reg.h"
 
 // ---------------- Config ----------------
+// >>> FILL THESE IN FOR YOUR OWN SETUP before uploading <<<
+//   WIFI_SSID / WIFI_PASSWORD : your 2.4 GHz Wi-Fi network
+//   TELEGRAM_BOT_TOKEN        : token from @BotFather on Telegram
+//   TELEGRAM_CHAT_ID          : the chat that should receive orders
+//                               (message your bot, then open
+//                               https://api.telegram.org/bot<TOKEN>/getUpdates)
+//   PICKUP_ADDRESS            : address included in every pickup order
+// Never commit your real values to a public repository.
 #define WIFI_SSID          "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD      "YOUR_WIFI_PASSWORD"
 #define TELEGRAM_BOT_TOKEN "YOUR_TELEGRAM_BOT_TOKEN"
 #define TELEGRAM_CHAT_ID   "YOUR_TELEGRAM_CHAT_ID"
-#define PICKUP_ADDRESS     "Apt 4B, Smart Laundry HQ, Delhi, India"
+#define PICKUP_ADDRESS     "YOUR_PICKUP_ADDRESS"
 #define REMINDER_DELAY_MS  86400000UL // 24 hours before reminder is sent
 
 #define NTP_SERVER          "pool.ntp.org"
@@ -43,7 +51,6 @@
 #define BATT_RAW_MIN 1980
 #define BATT_RAW_MAX 2600
 
-#define BUZZER_PIN  18   
 #define LED_RED_PIN 23   
 
 #define DEFAULT_TARGET_KG 5.0f
@@ -373,12 +380,9 @@ private:
 class AlertManager {
 public:
   void begin() {
-    pinMode(BUZZER_PIN, OUTPUT);
     pinMode(LED_RED_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(LED_RED_PIN, LOW);
   }
-  void beep(unsigned int durationMs) { delay(durationMs); }
   void updateThresholdLed(bool overThreshold) {
     digitalWrite(LED_RED_PIN, overThreshold ? ((millis() / 500) % 2) : LOW);
   }
@@ -450,7 +454,6 @@ private:
 };
 
 
-// ---------------- AppController ----------------
 // ---------------- AppController ----------------
 enum class UIState {
   MAIN_SCREEN,
@@ -689,10 +692,10 @@ void doOrder(bool isReminder = false) {
 }
 
 void setup() {
+  // Brownout detector disabled: Wi-Fi start-up current briefly sags the rail
+  // on battery power and would otherwise reset the board.
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
   pinMode(LED_RED_PIN, OUTPUT);
   digitalWrite(LED_RED_PIN, LOW);
   // Removed holdPowerDown() so the amplifier can warm up while Wi-Fi connects
@@ -756,18 +759,6 @@ void setup() {
 
 void loop() {
   float weight = loadCell.readKg();
-  // ---- TEMPORARY DIAGNOSTIC - add this near the top of loop(), after
-// "float weight = loadCell.readKg();" - remove once we've found the issue ----
-  static unsigned long _dbgLast = 0;
-  if (millis() - _dbgLast > 1000) {
-    _dbgLast = millis();
-    Serial.print("[DEBUG] is_ready=");
-    Serial.print(loadCell.isReady() ? "true" : "false");
-    Serial.print("  readKg()=");
-    Serial.print(weight, 3);
-    Serial.print("  app.targetKg()=");
-    Serial.println(app.targetKg());
-  }
 
   float target = app.targetKg();
   bool overThreshold = (target > 0.0f) && (weight >= target);
@@ -806,5 +797,3 @@ void loop() {
   app.update();
   yield();
 }
-
-

@@ -11,7 +11,7 @@ Complete wiring schematic and component list for the Smart Laundry Auto-Ordering
 | Weight Sensor | 5kg/10kg Load Cell + HX711 Amplifier |
 | Input | 3x Tactile Push Buttons (UP, OK, DOWN) |
 | Power Source | 3.7V Lithium Battery via TP4056 Charger (or USB Power Bank) |
-| Optional Alerts | 5V Active Buzzer, Red LED |
+| Optional Alert | Red LED |
 
 ## Master Pinout Table
 
@@ -28,7 +28,6 @@ Complete wiring schematic and component list for the Smart Laundry Auto-Ordering
 | D26 | Button (OK) | Tactile button, wired to GND, internal pull-up |
 | D27 | Button (DOWN) | Tactile button, wired to GND, internal pull-up |
 | D34 | Battery Sensor | Reads battery voltage (requires 10k/10k voltage divider) |
-| D18 | Buzzer (Optional) | Triggers active buzzer |
 | D23 | LED (Optional) | Triggers red threshold warning LED |
 
 ## Wiring Instructions

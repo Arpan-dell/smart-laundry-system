@@ -1,49 +1,90 @@
-# Autonomous IoT Laundry Auto-Ordering System
+# Smart Laundry Auto-Ordering System
 
-Battery-optimized ESP32-based smart laundry system that tracks detergent/consumable weight via a load cell, displays status on an OLED screen, and sends automated reorder alerts over Telegram when supplies run low.
+An ESP32-based smart laundry basket that weighs your laundry and automatically sends a pickup order over Telegram once the basket is full.
 
-## Overview
-
-This project automates a simple but common household problem: knowing when your detergent (or similar laundry consumable) is running low, and getting notified before it runs out — without manual tracking. An ESP32 continuously monitors weight via a load cell, shows live status on an OLED display, and pushes a Telegram alert when the weight crosses a configured threshold.
-
-## Features
-
-- **Weight sensing** — HX711 load cell amplifier for precise consumable weight tracking
-- **On-device UI** — SSD1306 OLED display with a menu system navigated via tactile buttons
-- **Automated alerts** — Wi-Fi + NTP time sync and Telegram Bot API integration for real-time low-stock notifications
-- **Power-aware design** — brownout protection, safe boot-time pin states, and staged peripheral initialization for stable operation on the ESP32's 3.3V rail
-
-## Hardware Used
-
-| Component | Purpose |
-|---|---|
-| ESP32 | Main microcontroller |
-| HX711 + Load Cell | Weight sensing |
-| SSD1306 OLED (I2C) | Status display and menu UI |
-| Tactile Buttons | Menu navigation / input |
-| Wi-Fi | NTP time sync + Telegram HTTP notifications |
-
-## Project Structure
-
-The system is built in three phases:
-
-1. **Phase 1 — UI / Menu**: OLED display setup, menu navigation via tactile buttons
-2. **Phase 2 — Load Cell & Alerts**: HX711 integration, weight thresholds, local alert logic
-3. **Phase 3 — Connectivity**: Wi-Fi, NTP time sync, and Telegram Bot notifications
+> **Status: Phase 1 (working prototype).** The core loop works end to end: weigh, display, auto-order and remind. Planned Phase 2 improvements are listed under [Roadmap](#roadmap-phase-2).
 
 ## How It Works
 
-1. On boot, the ESP32 initializes peripherals in a safe, staged order (brownout detector disabled, Wi-Fi held off during I2C/load-cell init to avoid rail sag).
-2. The load cell continuously measures the weight of the tracked consumable.
-3. The OLED displays current weight, status, and menu options via button input.
-4. When weight drops below a set threshold, the ESP32 connects to Wi-Fi, syncs time via NTP, and sends a Telegram message alerting that a reorder is needed.
+1. **Weighing:** a load cell under the basket, read through an HX711 amplifier, measures the weight of the laundry continuously.
+2. **Display:** a 0.96" SSD1306 OLED shows the live weight, a progress bar towards the target weight, the Wi-Fi signal and the battery level.
+3. **Auto-order:** when the weight stays at or above the target (default **5 kg**) for **3 seconds**, the ESP32 sends a pickup request to Telegram:
+   ```
+   Smart Laundry Alert
+   Order ID: #ORD-12345
+   Total Weight: 5.12 kg
+   Request Time: 04-Oct-2026 06:30 PM
+   Pickup Address: <your address>
+   ```
+   The 3-second hold stops a quick bump or press on the lid from triggering an order.
+4. **One order per load:** after an order is sent, the system latches so it doesn't send again. If the basket is still full **24 hours** later, it sends a single `[REMINDER]` message.
+5. **Reset:** when the basket is emptied (under 1 kg for 5 seconds), the latch resets, ready for the next load.
+6. **Local alert:** a red LED blinks whenever the weight is over the target.
+
+### Boot sequence
+
+On power-up the device shows a splash screen, connects to Wi-Fi (12-second timeout), syncs the clock over NTP (IST) so orders carry a real timestamp, then wakes and zeroes the load cell. If Wi-Fi fails, the scale and menu still work offline.
+
+### On-device menu
+
+Press **OK** on the main screen to open the menu. Use **UP/DOWN** to move and **OK** to select.
+
+| Menu item | What it does |
+|---|---|
+| Tare Scale | Zeroes the scale (empty basket) |
+| Set Target | Changes the order threshold in 0.5 kg steps |
+| Customer Order | Sends a pickup order manually, with confirmation |
+| Battery Info | Shows the battery percentage |
+| Exit Menu | Returns to the main screen |
+
+## Engineering Notes
+
+Problems solved while building Phase 1:
+
+- **Wi-Fi start-up resets:** Wi-Fi start-up draws a burst of current that sagged the battery rail and tripped the ESP32's brownout reset. The firmware disables the brownout detector and powers up peripherals in stages.
+- **Late HX711 wake-up:** at low supply voltage the HX711 sometimes isn't ready at boot, so it can't be zeroed. The firmware remembers that it still needs zeroing and does it the moment the sensor responds, so a large fake weight never appears.
+- **Button-press spikes:** pressing a button on the enclosure physically loads the scale. Weight updates pause for 1.5 seconds after menu actions, so a press can't cause a false reading or an accidental order.
+- **Button debouncing:** edge detection plus a 250 ms lockout on each button stops a single press registering twice.
+
+## Hardware
+
+| Component | Purpose |
+|---|---|
+| ESP32 Dev Board | Main controller, Wi-Fi |
+| Load Cell (5/10 kg) + HX711 | Weight sensing |
+| 0.96" SSD1306 OLED (I2C) | Live weight and menu UI |
+| 3 × Tactile Buttons | UP / OK / DOWN navigation |
+| Red LED | Over-target indicator |
+| 3.7 V Li-ion + TP4056 (or USB power) | Power |
+| 3D-printed enclosure | Designed in Tinkercad (see [`cad/`](cad/)) |
+
+Full pinout and wiring: [`circuit/wiring.md`](circuit/wiring.md). Block diagram: [`circuit/block_diagram.md`](circuit/block_diagram.md).
+
+## Repository Structure
+
+| Folder | Contents |
+|---|---|
+| [`code/`](code/) | ESP32 firmware (`laundry_system.ino`) |
+| [`circuit/`](circuit/) | Circuit diagram, wiring table, block diagram |
+| [`cad/`](cad/) | Enclosure STL files and renders |
+| [`photos/`](photos/) | Photos of the build |
+| [`videos/`](videos/) | Demo videos |
 
 ## Getting Started
 
-1. Flash the `.ino` sketch to an ESP32 using the Arduino IDE.
-2. Wire the HX711, load cell, SSD1306 OLED (I2C), and tactile buttons as per the pin definitions in the sketch.
-3. Update Wi-Fi credentials and Telegram Bot token/chat ID in the config section.
-4. Power on — the system will calibrate the load cell and boot into the main menu.
+1. Wire the components as described in [`circuit/wiring.md`](circuit/wiring.md).
+2. In the Arduino IDE, install the libraries **HX711**, **Adafruit SSD1306** and **Adafruit GFX**. (WiFi and HTTPClient come with the ESP32 board package.)
+3. Open [`code/laundry_system.ino`](code/laundry_system.ino) and **fill in the config section at the top with your own details**:
+   ```cpp
+   #define WIFI_SSID          "YOUR_WIFI_SSID"
+   #define WIFI_PASSWORD      "YOUR_WIFI_PASSWORD"
+   #define TELEGRAM_BOT_TOKEN "YOUR_TELEGRAM_BOT_TOKEN"   // from @BotFather
+   #define TELEGRAM_CHAT_ID   "YOUR_TELEGRAM_CHAT_ID"
+   #define PICKUP_ADDRESS     "YOUR_PICKUP_ADDRESS"
+   ```
+   > Never commit your real credentials to a public repository.
+4. If needed, calibrate the scale by adjusting `LOADCELL_CALIBRATION_FACTOR` with a known weight.
+5. Select your ESP32 board and port, then upload. The device boots, connects, zeroes the scale and opens the main screen.
 
 ## Gallery
 
@@ -61,11 +102,16 @@ The system is built in three phases:
 - [menu](videos/menu.mp4)
 - [weight verification](videos/weight%20verification.mp4)
 
-## Future Improvements
+## Roadmap (Phase 2)
 
-- Deep-sleep power optimization for longer battery life
-- Multi-item tracking (detergent, fabric softener, etc.)
-- Historical usage graphs via a companion app or dashboard
+- [ ] Set up Wi-Fi from a phone (captive portal) instead of hard-coded credentials
+- [ ] Save the target weight and calibration to flash so they survive a reboot
+- [ ] Filter weight readings (moving average or median) and calibrate from the menu
+- [ ] Deep sleep with button/timer wake-up for longer battery life
+- [ ] Accurate battery measurement through a calibrated voltage divider
+- [ ] Two-way Telegram: confirm or cancel an order from the phone
+- [ ] Verified TLS for API calls
+- [ ] Custom PCB to replace the perfboard
 
 ## Author
 
