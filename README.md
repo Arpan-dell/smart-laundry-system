@@ -45,6 +45,22 @@ The system is built in three phases:
 3. Update Wi-Fi credentials and Telegram Bot token/chat ID in the config section.
 4. Power on — the system will calibrate the load cell and boot into the main menu.
 
+## Gallery
+
+### Photos
+
+| | |
+|---|---|
+| <img src="photos/1.jpg" width="400"><br>**calibration phase** | <img src="photos/2.jpg" width="400"><br>**device** |
+| <img src="photos/3.jpg" width="400"><br>**front face** | <img src="photos/4.jpg" width="400"><br>**side face** |
+
+### Videos
+
+1. [connecting to wifi](videos/1.mp4)
+2. [custom order](videos/2.mp4)
+3. [menu](videos/3.mp4)
+4. [weight verification](videos/4.mp4)
+
 ## Future Improvements
 
 - Deep-sleep power optimization for longer battery life
