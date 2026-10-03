@@ -1,33 +1,37 @@
 // ============================================================================
 // SMART LAUNDRY AUTO-ORDERING SYSTEM - Phase 1
 // Weighs the laundry basket with an HX711 load cell, shows live weight and a
-// 3-button menu on an SSD1306 OLED, and sends a pickup order to Telegram once
-// the basket stays above the target weight.
+// 3-button menu on an SSD1306 OLED, and sends a pickup order to the laundry
+// manager on Telegram once the basket stays above the target weight.
 // ============================================================================
 
 #include <WiFi.h>
+#include "secrets.h" // tokens, passwords, private URLs: copy secrets.example.h to secrets.h
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include "HX711.h"
+#include <Preferences.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
 // ---------------- Config ----------------
-// >>> FILL THESE IN FOR YOUR OWN SETUP before uploading <<<
-//   WIFI_SSID / WIFI_PASSWORD : your 2.4 GHz Wi-Fi network
-//   TELEGRAM_BOT_TOKEN        : token from @BotFather on Telegram
-//   TELEGRAM_CHAT_ID          : the chat that should receive orders
-//                               (message your bot, then open
-//                               https://api.telegram.org/bot<TOKEN>/getUpdates)
-//   PICKUP_ADDRESS            : address included in every pickup order
-// Never commit your real values to a public repository.
-#define WIFI_SSID          "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD      "YOUR_WIFI_PASSWORD"
-#define TELEGRAM_BOT_TOKEN "YOUR_TELEGRAM_BOT_TOKEN"
-#define TELEGRAM_CHAT_ID   "YOUR_TELEGRAM_CHAT_ID"
-#define PICKUP_ADDRESS     "YOUR_PICKUP_ADDRESS"
 #define REMINDER_DELAY_MS  86400000UL // 24 hours before reminder is sent
+
+// >>> FILL THESE IN FOR YOUR OWN SETUP before uploading <<<
+// Wi-Fi networks the device may join from the "Scan WiFi" menu.
+// Open networks need no entry; secured networks must be listed here.
+// Telegram token, chat ID and pickup address go in secrets.h
+// (copy secrets.example.h to secrets.h). Never commit real values.
+struct KnownNetwork {
+  const char* ssid;
+  const char* pass;
+};
+const KnownNetwork KNOWN_NETWORKS[] = {
+  {"YOUR_WIFI_SSID_1", "YOUR_WIFI_PASSWORD_1"},
+  {"YOUR_WIFI_SSID_2", "YOUR_WIFI_PASSWORD_2"}
+};
+const int NUM_KNOWN_NETWORKS = sizeof(KNOWN_NETWORKS) / sizeof(KnownNetwork);
 
 #define NTP_SERVER          "pool.ntp.org"
 #define GMT_OFFSET_SEC       (5 * 3600 + 1800)  
@@ -41,7 +45,7 @@
 
 #define LOADCELL_DOUT_PIN 32
 #define LOADCELL_SCK_PIN  33
-#define LOADCELL_CALIBRATION_FACTOR -17500.0f
+#define LOADCELL_CALIBRATION_FACTOR -30616.0f
 
 #define BTN_UP_PIN   25
 #define BTN_OK_PIN   26
@@ -109,14 +113,34 @@ private:
 // ---------------- BatteryMonitor ----------------
 class BatteryMonitor {
 public:
-  void begin(uint8_t pin) { _pin = pin; }
+  void begin(uint8_t pin) { 
+    _pin = pin; 
+    _smoothedPct = -1; 
+  }
+  
   int readPercentage() {
-    int raw = analogRead(_pin);
+    // Take an average of 20 samples to filter out Wi-Fi electrical noise
+    long sum = 0;
+    for (int i = 0; i < 20; i++) {
+      sum += analogRead(_pin);
+    }
+    int raw = sum / 20;
+    
     int pct = map(raw, BATT_RAW_MIN, BATT_RAW_MAX, 0, 100);
-    return constrain(pct, 0, 100);
+    pct = constrain(pct, 0, 100);
+    
+    // Smooth the percentage so it doesn't jump randomly between redraws
+    if (_smoothedPct == -1) {
+      _smoothedPct = pct;
+    } else {
+      _smoothedPct = (_smoothedPct * 9 + pct) / 10;
+    }
+    
+    return _smoothedPct;
   }
 private:
   uint8_t _pin = 0;
+  int _smoothedPct = -1;
 };
 
 
@@ -230,6 +254,83 @@ public:
     _display.display();
   }
 
+  void drawWifiScanner(int numNetworks, int selectedIndex, int scrollOffset) {
+    _display.clearDisplay();
+    printCentered("SELECT WIFI", 0, 1);
+    _display.drawLine(0, 10, SCREEN_WIDTH, 10, SSD1306_WHITE);
+
+    if (numNetworks == -1) {
+      printCentered("Scanning...", 30, 1);
+    } else {
+      int totalItems = (numNetworks == 0) ? 1 : numNetworks + 1;
+      const int visibleRows = 3;
+      for (int row = 0; row < visibleRows; row++) {
+        int itemIdx = scrollOffset + row;
+        if (itemIdx >= totalItems) break;
+        int y = 14 + row * 16;
+        bool selected = (itemIdx == selectedIndex);
+
+        if (selected) {
+          _display.fillRect(0, y - 1, SCREEN_WIDTH, 14, SSD1306_WHITE);
+          _display.setTextColor(SSD1306_BLACK);
+        } else {
+          _display.setTextColor(SSD1306_WHITE);
+        }
+        _display.setTextSize(1);
+        _display.setCursor(6, y + 3);
+        
+        if (numNetworks == 0 && itemIdx == 0) {
+           _display.print("[ No WiFi - Back ]");
+        } else if (itemIdx == numNetworks) {
+           _display.print("[ Cancel & Back ]");
+        } else {
+           String ssid = WiFi.SSID(itemIdx);
+           if (ssid.length() > 18) ssid = ssid.substring(0, 18);
+           _display.print(ssid);
+           
+           if (WiFi.encryptionType(itemIdx) != WIFI_AUTH_OPEN) {
+             bool isSaved = false;
+             for (int i = 0; i < NUM_KNOWN_NETWORKS; i++) {
+               if (ssid == KNOWN_NETWORKS[i].ssid) {
+                 isSaved = true;
+                 break;
+               }
+             }
+             if (!isSaved) {
+               _display.setCursor(SCREEN_WIDTH - 10, y + 3);
+               _display.print("*");
+             }
+           }
+        }
+      }
+    }
+    _display.setTextColor(SSD1306_WHITE);
+    _display.display();
+  }
+
+  void drawCalibrateEmpty() {
+    _display.clearDisplay();
+    printCentered("CALIBRATION", 0, 1);
+    printCentered("1. Empty Basket", 20, 1);
+    printCentered("Then Press OK", 36, 1);
+    _display.display();
+  }
+
+  void drawCalibrateWeight(float knownWeight) {
+    _display.clearDisplay();
+    printCentered("CALIBRATION", 0, 1);
+    printCentered("2. Place Weight", 12, 1);
+    
+    char buf[16];
+    dtostrf(knownWeight, 4, 2, buf);
+    String s = String(buf) + " kg";
+    printCentered(s.c_str(), 28, 2);
+    
+    printCentered("UP/DOWN to edit", 46, 1);
+    printCentered("OK to save", 56, 1);
+    _display.display();
+  }
+
 private:
   Adafruit_SSD1306 _display{SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET};
 
@@ -311,8 +412,11 @@ public:
     digitalWrite(LOADCELL_SCK_PIN, LOW);
     delay(500);
 
+    _prefs.begin("scale", false);
+    _calFactor = _prefs.getFloat("cal", LOADCELL_CALIBRATION_FACTOR);
+
     _scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
-    _scale.set_scale(LOADCELL_CALIBRATION_FACTOR);
+    _scale.set_scale(_calFactor);
 
     unsigned long start = millis();
     while (millis() - start < timeoutMs) {
@@ -326,6 +430,23 @@ public:
     }
     _ready = false;
     _needsTare = true; // Mark that we STILL need to tare when it finally wakes up!
+    return false;
+  }
+
+  bool calibrate(float knownWeightKg, unsigned int timeoutMs = 5000) {
+    if (knownWeightKg <= 0.0f) return false;
+    unsigned long start = millis();
+    while (millis() - start < timeoutMs) {
+      if (_scale.is_ready()) {
+        long val = _scale.get_value(10); // get average of 10 raw readings minus tare offset
+        if (val == 0) return false; // Prevent divide by zero
+        _calFactor = (float)val / knownWeightKg;
+        _scale.set_scale(_calFactor);
+        _prefs.putFloat("cal", _calFactor);
+        return true;
+      }
+      delay(10);
+    }
     return false;
   }
 
@@ -361,7 +482,18 @@ public:
       if (raw < 0.0f) raw = 0.0f;
       
       if (millis() > _ignoreSpikesUntil) {
-        _lastWeight = raw;
+        // If the weight jumps massively (e.g. basket picked up or dropped), snap to it instantly
+        if (abs(raw - _lastWeight) > 1.0f) {
+          _lastWeight = raw;
+        } else {
+          // Otherwise, apply Exponential Moving Average (EMA) smoothing to eliminate tiny jitter
+          _lastWeight = (_lastWeight * 0.8f) + (raw * 0.2f);
+        }
+        
+        // Deadband: If the weight is less than 50 grams, force it to 0.0 kg to prevent asymptotic floating point tails
+        if (_lastWeight < 0.05f) {
+          _lastWeight = 0.0f;
+        }
       }
     }
     return _lastWeight;
@@ -369,6 +501,8 @@ public:
 
 private:
   HX711 _scale;
+  Preferences _prefs;
+  float _calFactor = 1.0f;
   bool _ready = false;
   bool _needsTare = true;
   float _lastWeight = 0.0f;
@@ -460,7 +594,10 @@ enum class UIState {
   MENU_LIST,
   EDIT_THRESHOLD,
   BATTERY_INFO,
-  CONFIRM_ORDER
+  CONFIRM_ORDER,
+  WIFI_SCANNER,
+  CALIBRATE_EMPTY,
+  CALIBRATE_WEIGHT
 };
 
 class AppController {
@@ -470,17 +607,23 @@ public:
   using FloatFn = float (*)();
   using IntFn   = int   (*)();
   using IgnoreSpikesFn = void (*)(unsigned int);
+  using VoidFn  = void  (*)();
+  using ConnectNetworkFn = void (*)(int);
+  using CalibrateFn = bool (*)(float);
 
   void begin(DisplayManager* display, ButtonManager* buttons,
              TareFn tareFn, OrderFn orderFn,
              FloatFn getWeightFn, IntFn getBatteryFn, IntFn getWifiBarsFn,
-             IgnoreSpikesFn ignoreSpikesFn,
-             float initialTargetKg) {
+             IgnoreSpikesFn ignoreSpikesFn, VoidFn scanWifiFn, ConnectNetworkFn connectNetworkFn,
+             CalibrateFn calibrateFn, float initialTargetKg) {
     _display = display;
     _buttons = buttons;
     _tareFn = tareFn;
     _orderFn = orderFn;
     _getWeightFn = getWeightFn;
+    _scanWifiFn = scanWifiFn;
+    _connectNetworkFn = connectNetworkFn;
+    _calibrateFn = calibrateFn;
     _getBatteryFn = getBatteryFn;
     _getWifiBarsFn = getWifiBarsFn;
     _ignoreSpikesFn = ignoreSpikesFn;
@@ -538,17 +681,24 @@ private:
   IntFn _getBatteryFn = nullptr;
   IntFn _getWifiBarsFn = nullptr;
   IgnoreSpikesFn _ignoreSpikesFn = nullptr;
+  VoidFn _scanWifiFn = nullptr;
+  ConnectNetworkFn _connectNetworkFn = nullptr;
+  CalibrateFn _calibrateFn = nullptr;
 
   UIState _state = UIState::MAIN_SCREEN;
   float _targetKg = 5.0f;
+  float _knownWeight = 1.0f;
   float _lastDrawnWeight = -1.0f;
   int _menuIndex = 0;
   int _menuScroll = 0;
+  int _wifiCount = -1;
+  int _wifiIndex = 0;
+  int _wifiScroll = 0;
   bool _needsRedraw = true;
 
-  static constexpr int NUM_MENU_ITEMS = 5;
+  static constexpr int NUM_MENU_ITEMS = 7;
   const char* _menuItems[NUM_MENU_ITEMS] = {
-    "Tare Scale", "Set Target", "Customer Order", "Battery Info", "Exit Menu"
+    "Tare Scale", "Set Target", "Customer Order", "Calibrate Scale", "Scan WiFi", "Battery Info", "Exit Menu"
   };
 
   void handleInput(ButtonManager::Presses p) {
@@ -575,6 +725,35 @@ private:
         }
         break;
 
+      case UIState::WIFI_SCANNER:
+        {
+          int totalItems = (_wifiCount <= 0) ? 1 : _wifiCount + 1;
+          if (p.down) {
+            _wifiIndex = (_wifiIndex + 1) % totalItems;
+            if (_wifiIndex >= _wifiScroll + 3) _wifiScroll = _wifiIndex - 2;
+            if (_wifiIndex == 0) _wifiScroll = 0;
+          } else if (p.up) {
+            _wifiIndex = (_wifiIndex - 1 + totalItems) % totalItems;
+            if (_wifiIndex < _wifiScroll) _wifiScroll = _wifiIndex;
+            if (_wifiIndex == totalItems - 1) _wifiScroll = max(0, totalItems - 3);
+          } else if (p.ok) {
+            if (_wifiCount <= 0 || _wifiIndex == _wifiCount) {
+              // User clicked Cancel or there are no networks
+              _state = UIState::MAIN_SCREEN;
+            } else if (_connectNetworkFn) {
+              _display->showToast("Connecting...");
+              _connectNetworkFn(_wifiIndex);
+              if (_getWifiBarsFn && _getWifiBarsFn() >= 0) {
+                _display->showToast("CONNECTED!");
+              } else {
+                _display->showToast("FAILED");
+              }
+              _state = UIState::MAIN_SCREEN;
+            }
+          }
+        }
+        break;
+
       case UIState::EDIT_THRESHOLD:
         if (p.up) {
           _targetKg += 0.5f;
@@ -588,6 +767,29 @@ private:
 
       case UIState::BATTERY_INFO:
         if (p.ok) _state = UIState::MENU_LIST;
+        break;
+
+      case UIState::CALIBRATE_EMPTY:
+        if (p.ok) {
+          _display->showToast("Taring...");
+          if (_tareFn) _tareFn();
+          _state = UIState::CALIBRATE_WEIGHT;
+        } else if (p.up || p.down) {
+          _state = UIState::MENU_LIST;
+        }
+        break;
+
+      case UIState::CALIBRATE_WEIGHT:
+        if (p.up) {
+          _knownWeight += 0.1f;
+        } else if (p.down) {
+          _knownWeight = max(0.1f, _knownWeight - 0.1f);
+        } else if (p.ok) {
+          _display->showToast("Measuring...", 300);
+          bool ok = _calibrateFn && _calibrateFn(_knownWeight);
+          _display->showToast(ok ? "CALIBRATED!" : "CAL FAILED", 1200);
+          _state = UIState::MAIN_SCREEN;
+        }
         break;
 
       case UIState::CONFIRM_ORDER:
@@ -622,9 +824,24 @@ private:
         _state = UIState::CONFIRM_ORDER;
         break;
       case 3:
-        _state = UIState::BATTERY_INFO;
+        _state = UIState::CALIBRATE_EMPTY;
+        _knownWeight = 1.0f;
         break;
       case 4:
+        _state = UIState::WIFI_SCANNER;
+        _wifiCount = -1;
+        _wifiIndex = 0;
+        _wifiScroll = 0;
+        _needsRedraw = true;
+        _display->drawWifiScanner(-1, 0, 0); // Show Scanning
+        if (_scanWifiFn) _scanWifiFn();
+        _wifiCount = WiFi.scanComplete();
+        if (_wifiCount < 0) _wifiCount = 0;
+        break;
+      case 5:
+        _state = UIState::BATTERY_INFO;
+        break;
+      case 6:
         _state = UIState::MAIN_SCREEN;
         break;
     }
@@ -651,6 +868,15 @@ private:
       case UIState::CONFIRM_ORDER:
         _display->drawConfirmOrder();
         break;
+      case UIState::WIFI_SCANNER:
+        _display->drawWifiScanner(_wifiCount, _wifiIndex, _wifiScroll);
+        break;
+      case UIState::CALIBRATE_EMPTY:
+        _display->drawCalibrateEmpty();
+        break;
+      case UIState::CALIBRATE_WEIGHT:
+        _display->drawCalibrateWeight(_knownWeight);
+        break;
     }
   }
 };
@@ -676,6 +902,7 @@ float getWeight()       { return loadCell.readKg(); }
 int   getBatteryPct()   { return battery.readPercentage(); }
 int   getWifiBars()     { return network.wifiBars(); }   
 void  doIgnoreSpikes(unsigned int ms) { loadCell.ignoreSpikesFor(ms); }
+bool  doCalibrate(float weight)       { return loadCell.calibrate(weight); }
 
 void doTare() {
   loadCell.tare();
@@ -688,6 +915,42 @@ void doOrder(bool isReminder = false) {
     Serial.print("Telegram sent, HTTP "); Serial.println(code);
   } else {
     Serial.print("Telegram send failed, code "); Serial.println(code);
+  }
+}
+
+void doScanWifi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  WiFi.scanNetworks();
+}
+
+void doConnectNetwork(int index) {
+  String ssid = WiFi.SSID(index);
+  const char* pass = "";
+  
+  if (WiFi.encryptionType(index) != WIFI_AUTH_OPEN) {
+    bool found = false;
+    for (int i = 0; i < NUM_KNOWN_NETWORKS; i++) {
+      if (ssid == KNOWN_NETWORKS[i].ssid) {
+        pass = KNOWN_NETWORKS[i].pass;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      Serial.println("No password saved for this network");
+      return;
+    }
+  }
+
+  WiFi.begin(ssid.c_str(), pass);
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
+    delay(500);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
   }
 }
 
@@ -713,10 +976,11 @@ void setup() {
   display.showBootScreen("SMART", "LAUNDRY");
   delay(1200);
 
-  // STEP 2: WI-FI CONNECTION TEST
+  // STEP 2: WI-FI AUTO CONNECT
   display.showStatusLine("Connecting", "WiFi...", 0);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  // Calling begin() without arguments forces the ESP32 to connect to the last saved network in NVS
+  WiFi.begin();
   
   unsigned long start = millis();
   int dots = 0;
@@ -725,7 +989,7 @@ void setup() {
     dots = (dots + 1) % 6;
     display.showStatusLine("Connecting", "WiFi...", dots);
   }
-
+  
   if (WiFi.status() == WL_CONNECTED) {
     display.showStatusLine("Syncing", "Time...", 0);
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
@@ -744,7 +1008,6 @@ void setup() {
     }
   } else {
     display.showToast("WIFI FAILED");
-    WiFi.mode(WIFI_OFF);
   }
 
   display.showStatusLine("Waking", "Load Cell...", 0);
@@ -754,7 +1017,7 @@ void setup() {
 
   app.begin(&display, &buttons, doTare, doOrder,
             getWeight, getBatteryPct, getWifiBars,
-            doIgnoreSpikes, DEFAULT_TARGET_KG);
+            doIgnoreSpikes, doScanWifi, doConnectNetwork, doCalibrate, DEFAULT_TARGET_KG);
 }
 
 void loop() {
